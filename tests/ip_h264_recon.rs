@@ -54,6 +54,9 @@ fn package_sources() -> Vec<String> {
         .lines()
         .filter_map(|l| l.strip_prefix("source "))
         .map(|p| format!("{PKG}/{}", p.trim()))
+        .chain(std::iter::once(
+            "ip/memory/sdram_burst/rtl/frame_addr.v".to_owned(),
+        ))
         .collect()
 }
 
@@ -2470,21 +2473,23 @@ fn picture_tokens(pic: &PicDesc, rng: &mut Rng) -> Vec<u32> {
     t
 }
 
-/// `h264_frame_addr`'s layout, read back.
+/// `sdram_burst`'s `frame_addr` at its defaults (1280x720: 40 x 23 luma
+/// tiles), written again from its header: tile (tx, ty) in bank
+/// (tx + 2 ty) mod 4, row frame * 350 + plane base + ty * tiles-across/4
+/// + tx / 4, the word inside the tile (y % 32) * 16 + (x % 32) / 2.
 fn frame_word(frame: u32, plane: usize, x: usize, y: usize) -> u32 {
     let x = u32::try_from(x).expect("small");
     let y = u32::try_from(y).expect("small");
-    let off = if plane == 0 {
-        ((y >> 5) << 15) | ((x >> 5) << 9) | ((y & 31) << 4) | ((x & 31) >> 1)
-    } else {
-        (1 << 20)
-            | (u32::from(plane == 2) << 19)
-            | ((y >> 5) << 14)
-            | ((x >> 5) << 9)
-            | ((y & 31) << 4)
-            | ((x & 31) >> 1)
+    let (tx, ty) = (x >> 5, y >> 5);
+    let (luma_rows, chroma_rows, frame_rows) = (23 * 10, 12 * 5, 23 * 10 + 2 * 12 * 5);
+    let (base, across) = match plane {
+        0 => (0, 10),
+        1 => (luma_rows, 5),
+        _ => (luma_rows + chroma_rows, 5),
     };
-    ((frame & 7) << 21) | off
+    let row = frame * frame_rows + base + ty * across + (tx >> 2);
+    let bank = (tx + 2 * ty) & 3;
+    (row << 11) | (bank << 9) | ((y & 31) << 4) | ((x & 31) >> 1)
 }
 
 /// Draws a picture with real coefficient levels and the residuals they
@@ -3162,7 +3167,7 @@ fn decode_dump(dir: &Path, name: &str) {
         }
         assert_eq!(pi, d.preds.len(), "{name}: prediction words left over");
         for (k, pic) in d.post.iter().enumerate() {
-            let frame = u32::try_from((k + 1) % 8).expect("small");
+            let frame = u32::try_from((k + 1) % 16).expect("small");
             for (addr, mb) in pic.iter().enumerate() {
                 let (mx, my) = (addr % d.w, addr / d.w);
                 for c in 0..3 {

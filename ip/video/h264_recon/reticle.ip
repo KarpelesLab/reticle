@@ -1,11 +1,19 @@
-# h264_recon — H.264 reconstruction (work in progress).
+# h264_recon — the H.264 decoder's reconstruction back end: the syntax
+# token stream (after h264_mvpred) and h264_inter's prediction in, the
+# deblocked picture out through one sdram_burst client port in the tiled
+# frame layout. Dequantisation and inverse transforms (8.5), intra
+# prediction (8.3), the deblocking filter (8.7). README.md says what is
+# checked against what: every sample of seventeen libx264 streams as the
+# ffmpeg-exact model decodes them.
 name h264_recon
 version 0.1.0
 license MIT
-description "H.264 reconstruction: dequantisation, inverse transforms, intra prediction and deblocking"
+description "H.264 reconstruction: dequantisation, inverse transforms, intra prediction, deblocking and the tiled frame writes, every sample checked against the model of libx264 streams"
 
 top h264_recon
 target xc7
+
+depends sdram_burst ^1.0.0
 
 source rtl/h264_dbf_tables.v
 source rtl/h264_dbf_filter.v
@@ -14,6 +22,28 @@ source rtl/h264_residual.v
 source rtl/h264_intra.v
 source rtl/h264_deblock.v
 source rtl/h264_tokin.v
-source rtl/h264_frame_addr.v
 source rtl/h264_frame_wr.v
 source rtl/h264_recon.v
+
+port clk in
+port rst_n in
+port tok_valid in
+port tok_ready out
+port tok in 32
+port pred_valid in
+port pred_ready out
+port pred_data in 32
+port frame_idx in 4
+port pic_done out
+port cmd_valid out
+port cmd_ready in
+port cmd_we out
+port cmd_addr out 24
+port cmd_len out 4
+port wr_valid out
+port wr_ready in
+port wr_data out 16
+port wr_be out 2
+port rd_valid in
+port rd_data in 16
+port rd_last in

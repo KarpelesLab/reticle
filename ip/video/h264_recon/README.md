@@ -14,7 +14,6 @@ deblocked picture out to SDRAM in the tiled frame layout.
 | `h264_deblock` | stage C: the deblocking filter of §8.7, and what is final leaves as row records |
 | `h264_dbf_filter`, `h264_dbf_tables` | one line of eight samples across an edge, and Tables 8-16 and 8-17 |
 | `h264_frame_wr` | stage D: row records to `sdram_burst` write bursts |
-| `h264_frame_addr` | (frame, plane, x, y) to a word address — **a stand-in** for `sdram_burst`'s `frame_addr` |
 
 Everything here was written from ITU-T H.264 (V16, 06/2026). No other
 decoder's source was read. Clause and equation numbers are that edition's.
@@ -129,10 +128,10 @@ samples a word with the even one in bits 7:0. A segment starts at a multiple
 of 16 (or 8) samples and a tile is 32 wide, so no burst leaves its tile's
 SDRAM row. `pic_done` pulses when a picture's last burst is accepted.
 
-`h264_frame_addr` is a stand-in for the `frame_addr` module the memory
-contract gives to `ip/memory/sdram_burst`: 32x32 tiles in raster order, a
-frame every 2^21 words, no bank swizzle. Swapping in the real one is
-replacing that file.
+Addresses come from `frame_addr` in `ip/memory/sdram_burst`, the one
+implementation of the tiled layout every client shares (this package
+depends on it): 32x32 tiles, one SDRAM row each, the four tiles of any
+2x2 square in four banks.
 
 ## Interfaces
 
@@ -140,7 +139,7 @@ replacing that file.
 |---|---|
 | `tok_valid`, `tok_ready`, `tok[31:0]` | the token stream, `docs/h264-decoder.md` §1 |
 | `pred_valid`, `pred_ready`, `pred_data[31:0]` | inter prediction from `h264_inter`: per inter macroblock, luma 16 rows of 4 words, Cb 8 rows of 2, Cr 8 rows of 2; four samples a word, the first lowest |
-| `frame_idx[3:0]` | the frame buffer the next picture is written to, sampled with its `SLICE_FIRST` 0 |
+| `frame_idx[3:0]` | the frame buffer the next picture is written to, sampled with its `SLICE_FIRST` 0; `frame_addr`'s `frame` (16 of its 23 at 720p) |
 | `pic_done` | one cycle, when a picture's last burst has been accepted |
 | `cmd_*`, `wr_*`, `rd_*` | one `sdram_burst` client port; only writes are made |
 
@@ -150,6 +149,15 @@ Tokens read: `SPS_DIMS`, `SLICE_HDR` (constrained_intra_pred_flag),
 transform_size_8x8_flag), `MB_QP`, `COEF_BLK`, `COEF`, `PCM`, `MB_END`; the
 rest are passed over. `MV` is `h264_mvpred`'s, as its section of
 `docs/h264-decoder.md` gives it; only list 0 is read.
+
+**The token fork.** `h264_mvpred`'s output goes both here and to
+`h264_inter`, a token moving when both take it, and `h264_inter`'s
+prediction for a macroblock needs that macroblock's `MV`s, which come
+before its `MB_CBP` (docs/h264-decoder.md). Nothing here waits on a
+prediction to take tokens: stage A stalls only at an `MB_START`, for
+room in the pipeline, and what it waits for there is at most the
+prediction of an earlier macroblock, whose tokens both sides already
+have.
 
 ## Measured
 

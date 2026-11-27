@@ -18,10 +18,8 @@
 //   accepted.
 //
 // Where a sample goes
-//   `h264_frame_addr` maps (frame, plane, x, y) to a word address. The
-//   one in this package is a stand-in written to the contract's layout
-//   (32x32 tiles, one per 1024-byte row) until `sdram_burst`'s
-//   `frame_addr` lands; it is the only thing to swap.
+//   `frame_addr` of `ip/memory/sdram_burst` maps (frame, plane, x, y) to
+//   the word address, as every client of the frame layout does.
 module h264_frame_wr (
     input  wire        clk,
     input  wire        rst_n,
@@ -90,13 +88,18 @@ module h264_frame_wr (
     reg [15:0] word_hi;
 
     wire [23:0] head_addr;
-    h264_frame_addr where (
-        .frame(q_head[31:28]),
+    wire [4:0]  head_run;
+    frame_addr where (
+        .frame({1'b0, q_head[31:28]}),
         .plane(q_head[27:26]),
         .x(q_head[14:4]),
         .y(q_head[25:15]),
-        .addr(head_addr)
+        .addr(head_addr),
+        .run(head_run)
     );
+    // A row segment starts at a multiple of 16 (luma) or 8 (chroma)
+    // samples, so `run` is always at least the 8 or 4 words of a burst.
+    wire unused_run = &{1'b0, head_run};
 
     // The high beat accepted with another word waiting: take it at once.
     wire next_now = (ws == W_HI) && wr_ready && (words != 3'd0) && !q_empty;
