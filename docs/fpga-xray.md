@@ -1195,6 +1195,44 @@ says anything.
   *both* halves' features on the one wire pair and lets the tile's own
   (already filtered) feature set keep the one it has.
 
+#### An `ODDR` on a `_SING` pad (2026-11-27)
+
+The SDRAM controller found that an `ODDR` on `F4` or `L6` (bank 35's
+`IO_0` and `IO_25` on the FGG484, `E6` on the FTG256) did not route, as a
+plain output as much as a three-state one. Two causes, one after the other:
+
+- **The register was placed in another tile.** `xray::iologic` declares a
+  tile type's two `OLOGIC` halves, and a `_SING` tile's both on its one set
+  of wires. With two sites whose `OQ` reached the pad, the pad did not
+  decide the `ODDR`'s site (`place::follow_fixed_ends` takes only a single
+  answer), and it went to `RIOI3_X57Y145`, where no wire joins it to the
+  pad: "no path exists from the driver of `q` to `q$io0.I[0]`". The half
+  whose features the tile does not have is now left out, as the delay's
+  already was (`parse::bels_of`), and the pad places the register.
+- **Then its clock had no way in.** A `_SING` tile's clock wires are
+  `IOI_SING_LEAF_GCLK<n>`, `IOI_SING_RCLK_FORIO<n>` and `IOI_SING_IOCLK<n>`
+  (`tile_type_RIOI3_SING.json`), and its alias's `segbits` name the pips
+  into `IOI_OCLK_<h>` from `IOI_LEAF_GCLK<n>` and so on, so the pips the
+  tile has had no bits under its own names and were no pips here.
+  `xray::single_io_clock_pip` renames them: the half the window keeps is
+  `h` (`start_offset` 2 keeps `IOI_OCLK_0.*`, bits `28_83` and up; 0 keeps
+  `IOI_OCLK_1.*`, `28_39` and up), its wires become the tile's `_0`, the
+  clock row's names gain their `SING_`, and the interconnect's
+  `IOI_IMUX31_<1-h>` is the tile's `IOI_IMUX31_0`. Every renamed pip is one
+  the tile's own JSON lists.
+
+**What that rests on: a reading of the names, not a measurement.** The
+window rule is checked (above); that the `_SING` tile's
+`IOI_SING_LEAF_GCLK<n>` is the two-pad tile's `IOI_LEAF_GCLK<n>` under
+another name, with the same mux bits, is not: no Vivado bitstream with a
+clock into a `_SING` tile's `OLOGIC` has been read here, and there is no
+Vivado on this machine to make one. `an_oddr_on_a_single_pad_tile_routes`
+builds both balls with a global and a fabric clock, and every bit decodes
+— but the decode reads the clock pip through the same renaming, so that
+says the bits are the ones chosen, not that they are right. **A board
+should still not put a clocked signal on an `IO_0` or `IO_25` ball** until
+one bitstream of Vivado's, or a board, has confirmed the clock pips.
+
 #### What was measured, and what was not
 
 - **CHECKED.** `every_single_io_tile_vivado_drove_decodes_to_exactly_what_it_needed`

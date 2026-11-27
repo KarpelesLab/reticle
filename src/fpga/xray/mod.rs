@@ -762,6 +762,53 @@ pub struct TileAlias {
     pub start_offset: u32,
 }
 
+/// The name in a `_SING` IO logic tile of a clock pip its alias's `segbits`
+/// names in the two-pad tile's wires, or `None` for any other feature.
+///
+/// A `_SING` tile's bits are its alias's (`RIOI3` for `RIOI3_SING`), one
+/// half of them ([`TileAlias`]), but its wires have names of their own:
+/// its one half is numbered 0 whichever half it is, and the clocks it takes
+/// from the clock row are `IOI_SING_LEAF_GCLK<n>`, `IOI_SING_RCLK_FORIO<n>`
+/// and `IOI_SING_IOCLK<n>` (`tile_type_RIOI3_SING.json`), where the two-pad
+/// tile's are `IOI_LEAF_GCLK<n>`, `IOI_RCLK_FORIO<n>` and `IOI_IOCLK<n>`. So
+/// the pips into its `OLOGIC`'s clock, `IOI_OCLK_0` and `IOI_OCLKM_0`, had no
+/// bits under their own names, and a clock could not reach an `ODDR` on such
+/// a pad at all. Half `h` is the one the window keeps: `start_offset` 2 keeps
+/// words 2 and 3, where `IOI_OCLK_0.*` lie (`28_83` ..), and 0 keeps words 0
+/// and 1, where `IOI_OCLK_1.*` lie (`28_39` ..). The interconnect's
+/// `IOI_IMUX31_<1-h>`, which feeds half `h` of a two-pad tile, is the
+/// `_SING` tile's `IOI_IMUX31_0`.
+///
+/// **A reading of the names, not a measurement.** Every pip this produces is
+/// one `tile_type_RIOI3_SING.json` lists, and its bits are the two-pad
+/// tile's for the same half, as the window rule (checked) has every other
+/// feature of these tiles; no Vivado bitstream with a clock into a `_SING`
+/// tile's `OLOGIC` has been read to confirm it.
+fn single_io_clock_pip(name: &str, start_offset: u32) -> Option<String> {
+    let h = match start_offset {
+        2 => 0,
+        0 => 1,
+        _ => return None,
+    };
+    let (to, from) = name.split_once('.')?;
+    let to = match to.strip_suffix(&format!("_{h}"))? {
+        base @ ("IOI_OCLK" | "IOI_OCLKM") => format!("{base}_0"),
+        _ => return None,
+    };
+    let from = if let Some(n) = from.strip_prefix("IOI_LEAF_GCLK") {
+        format!("IOI_SING_LEAF_GCLK{n}")
+    } else if let Some(n) = from.strip_prefix("IOI_RCLK_FORIO") {
+        format!("IOI_SING_RCLK_FORIO{n}")
+    } else if let Some(n) = from.strip_prefix("IOI_IOCLK") {
+        format!("IOI_SING_IOCLK{n}")
+    } else if from == format!("IOI_IMUX31_{}", 1 - h) {
+        "IOI_IMUX31_0".to_owned()
+    } else {
+        return None;
+    };
+    Some(format!("{to}.{from}"))
+}
+
 /// One feature of a `segbits` file: a name and the bits that make it
 /// true.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2006,6 +2053,11 @@ impl XrayDatabase {
             }
             for bit in feature.ones.iter_mut().chain(feature.zeros.iter_mut()) {
                 bit.col -= shift;
+            }
+            if tile.tile_type.ends_with("IOI3_SING")
+                && let Some(name) = single_io_clock_pip(&feature.name, alias.start_offset)
+            {
+                feature.name = name;
             }
             kept.push(feature);
         }

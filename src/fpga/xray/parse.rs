@@ -1035,8 +1035,14 @@ pub(super) fn bels_of(
         }
         // A `_SING` tile's other half, whose features the tile does not have:
         // its wires are the half it has, and a delay declared twice there is
-        // one the placer cannot tell from its twin.
-        if extra.kind == super::idelay::DELAY_KIND && bel.config.is_empty() {
+        // one the placer cannot tell from its twin. So is an `IDDR` or an
+        // `ODDR`: with both halves declared, an `ODDR` on the pad of a
+        // `_SING` tile had two sites its `OQ` reached the pad from, so the
+        // pad did not decide its site (`place::follow_fixed_ends`), and it
+        // was placed in another tile, where no wire joins it to the pad.
+        let single_half = extra.kind == super::idelay::DELAY_KIND
+            || (tile.tile_type.ends_with("_SING") && matches!(extra.kind, "ddr_in" | "ddr_out"));
+        if single_half && bel.config.is_empty() {
             continue;
         }
         // A bel the prefix machinery did find, but without a kind or pins

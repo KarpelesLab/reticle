@@ -80,3 +80,134 @@ fn an_iobuf_on_each_bit_of_an_inout_vector_maps() {
         .collect();
     assert_eq!(enables.len(), 2, "one enable for two buffers: {enables:?}");
 }
+
+/// The Project X-Ray database, or `None` with a line saying what is missing:
+/// `RETICLE_CHIPDB`, then the pinned copy in the per-user cache, as
+/// `tests/fpga_xray_tristate.rs` looks.
+fn chipdb() -> Option<String> {
+    let probe = "artix7/xc7a100t/tilegrid.json";
+    if let Ok(root) = std::env::var("RETICLE_CHIPDB") {
+        if Path::new(&format!("{root}/{probe}")).exists() {
+            return Some(root);
+        }
+        eprintln!("skipped: RETICLE_CHIPDB is `{root}` but `{root}/{probe}` is not there");
+        return None;
+    }
+    let var = |v| std::env::var(v).ok().filter(|s: &String| !s.is_empty());
+    let cache = var("XDG_CACHE_HOME")
+        .or_else(|| var("LOCALAPPDATA").filter(|_| cfg!(windows)))
+        .map(|d| format!("{d}/reticle"))
+        .or_else(|| var("HOME").map(|h| format!("{h}/.cache/reticle")));
+    let dir = cache.map(|c| format!("{c}/prjxray-db/0a0addedd73e7e4139d52a6d8db4258763e0f1f3"));
+    match dir {
+        Some(dir) if Path::new(&format!("{dir}/{probe}")).is_file() => Some(dir),
+        _ => {
+            eprintln!(
+                "skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db` \
+                 or set RETICLE_CHIPDB to a prjxray-db checkout"
+            );
+            None
+        }
+    }
+}
+
+/// A design built to a bitstream for the XC7A100T-FGG484 with `xdc`: the
+/// build's output, and the lines `--decode` reads back from the bitstream.
+fn bitstream(name: &str, source: &str, xdc: &str, root: &str) -> (Output, Vec<String>) {
+    let dir = scratch(name);
+    let constraints = dir.join("pins.xdc");
+    std::fs::write(&constraints, xdc).unwrap();
+    let src = dir.join("source.v");
+    std::fs::write(&src, source).unwrap();
+    let bit = dir.join("top.bit");
+    let out = reticle()
+        .env("RETICLE_CHIPDB", root)
+        .args([
+            "fpga",
+            "--device",
+            "xc7a100t-fgg484",
+            "--report",
+            "--constraints",
+        ])
+        .arg(&constraints)
+        .arg("--bitstream")
+        .arg(&bit)
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg(&src)
+        .output()
+        .expect("failed to run the reticle binary");
+    if !out.status.success() {
+        return (out, Vec::new());
+    }
+    let decoded = reticle()
+        .env("RETICLE_CHIPDB", root)
+        .args(["fpga", "--device", "xc7a100t-fgg484", "--decode"])
+        .arg(&bit)
+        .output()
+        .expect("failed to run the reticle binary");
+    let lines = String::from_utf8_lossy(&decoded.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    (out, lines)
+}
+
+/// **An `ODDR` on the pad of a single-pad IO tile routes**, on both of bank
+/// 35's (`F4`, `IO_0`, the top tile's `_Y1` half; `L6`, `IO_25`, the bottom
+/// tile's `_Y0`), clocked from a global buffer and from the fabric. It did not:
+/// both halves of a `_SING` tile's `OLOGIC` were declared on its one set of
+/// wires, so the pad did not decide which the `ODDR` took and it was placed
+/// in another tile; and the pips into the `OLOGIC`'s clock had no bits under
+/// the `_SING` tile's wire names. Would catch either coming back, as a build
+/// that does not route, and the register on the wrong half, as a feature the
+/// tile does not have. **Would not catch** clock pip bits that are wrong on
+/// silicon: they are the two-pad tile's, by a reading of the names that no
+/// Vivado bitstream has confirmed (`xray::single_io_clock_pip`), and the
+/// decode reads them back through the same reading.
+#[test]
+fn an_oddr_on_a_single_pad_tile_routes() {
+    let Some(root) = chipdb() else { return };
+    let fabric = "module top (input wire clk, input wire d, output wire q);\n\
+                  ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b0)) od (\n\
+                  .Q(q), .C(clk), .CE(1'b1), .D1(d), .D2(d), .R(1'b0), .S(1'b0));\nendmodule\n";
+    let global = "module top (input wire clk, input wire d, output wire q);\n\
+                  wire g;\n  BUFG bg (.I(clk), .O(g));\n\
+                  ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b0)) od (\n\
+                  .Q(q), .C(g), .CE(1'b1), .D1(d), .D2(d), .R(1'b0), .S(1'b0));\nendmodule\n";
+    let mut wrong = Vec::new();
+    for (ball, tile, half) in [
+        ("F4", "RIOI3_SING_X57Y149", "OLOGIC_Y1"),
+        ("L6", "RIOI3_SING_X57Y100", "OLOGIC_Y0"),
+    ] {
+        let xdc = format!(
+            "set_property -dict {{PACKAGE_PIN H4 IOSTANDARD LVCMOS33}} [get_ports clk]\n\
+             set_property -dict {{PACKAGE_PIN B2 IOSTANDARD LVCMOS33}} [get_ports d]\n\
+             set_property -dict {{PACKAGE_PIN {ball} IOSTANDARD LVCMOS33}} [get_ports q]\n"
+        );
+        for (clock, source) in [("fabric", fabric), ("global", global)] {
+            let name = format!("single-{ball}-{clock}");
+            let (out, decoded) = bitstream(&name, source, &xdc, &root);
+            let log = text(&out);
+            if !out.status.success() {
+                wrong.push(format!("{name}: {log}"));
+                continue;
+            }
+            if !log.contains(" 0 bit(s) unexplained") {
+                wrong.push(format!("{name}: bits unexplained: {log}"));
+            }
+            let here = |feature: &str| {
+                decoded
+                    .iter()
+                    .any(|l| l.starts_with(tile) && l.contains(feature))
+            };
+            if !here(&format!("{half}.OQUSED")) {
+                wrong.push(format!("{name}: no `{half}.OQUSED` on `{tile}`"));
+            }
+            if !here("IOI_OCLK_0.") {
+                wrong.push(format!("{name}: no clock pip into `{tile}`"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
