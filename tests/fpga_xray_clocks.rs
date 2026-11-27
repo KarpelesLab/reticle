@@ -223,7 +223,10 @@ fn build(root: &str, name: &str) -> Built {
         .arg(dir.join(format!("{name}.v")))
         .output()
         .expect("the reticle binary runs");
-    let log = String::from_utf8_lossy(&run.stderr).into_owned();
+    // The status as well as what it said: a build killed under memory
+    // pressure says nothing, and its status ("signal: 9") is the difference
+    // between a machine that ran out and a flow that failed.
+    let log = format!("{}\n{}", run.status, String::from_utf8_lossy(&run.stderr));
     if !run.status.success() {
         return Built {
             ok: false,

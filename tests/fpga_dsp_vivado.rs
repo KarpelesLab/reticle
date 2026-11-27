@@ -1143,7 +1143,12 @@ fn build(dir: &Path, top: &str, asker: &str) -> Result<(String, PathBuf, PathBuf
         .output()
         .expect("failed to run the reticle binary");
     if !run.status.success() {
-        return Err(String::from_utf8_lossy(&run.stderr).into_owned());
+        // With the status: a build killed under memory pressure says nothing.
+        return Err(format!(
+            "{}\n{}",
+            run.status,
+            String::from_utf8_lossy(&run.stderr)
+        ));
     }
     let err = String::from_utf8_lossy(&run.stderr);
     assert!(
