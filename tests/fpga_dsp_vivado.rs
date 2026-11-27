@@ -834,6 +834,80 @@ fn what_a_block_cannot_hold_stays_out_and_is_still_right() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// **A sum whose products are too small for a block is still driven, and right.**
+/// `(a + b) * 5 + (c + d) * 4`, as an AAC decoder wrote it, was taken for a chain
+/// of blocks because its products' nets were as wide as the sum, which skipped the
+/// one question that asks whether a product goes on a block at all; the first
+/// product then stayed in logic, the chain was abandoned with its adders already
+/// gone, and the sum's net was left with nothing driving it. The second design
+/// has one product a block takes and one it does not, which a chain built term by
+/// term would have left half built. Would catch either going back: the first by
+/// `map` failing on an undriven net, both by the simulation. Would not catch a sum
+/// that is driven and wrong only where the testbench's operands never reach.
+#[test]
+fn a_sum_with_a_product_too_small_for_a_block_is_still_driven() {
+    let Some(dir) = fixtures() else { return };
+    let head = |y: u32| {
+        format!(
+            "module staged (input wire clk, input wire en, input wire rst, input wire [16:0] a, \
+             input wire [16:0] b, output wire [{}:0] y, output wire [16:0] x);\n  assign x = a;\n\
+             reg [16:0] a0, b0; reg [{}:0] q;\n\
+             always @(posedge clk) begin a0 <= a; b0 <= b; end\n",
+            y - 1,
+            y - 1
+        )
+    };
+    let cases: [(&str, u32, &str, usize); 2] = [
+        (
+            "constant_products",
+            16,
+            "  wire [15:0] w = ({12'd0, a0[3:0]} + {12'd0, b0[3:0]}) * 16'd5 \
+             + ({14'd0, a0[5:4]} + {13'd0, b0[6:4]}) * 16'd4;\n\
+             always @(posedge clk) q <= w;\n  assign y = q;\n",
+            0,
+        ),
+        (
+            "one_product_for_a_block",
+            40,
+            "  wire [39:0] w = a0 * b0 + ({36'd0, a0[3:0]} + {36'd0, b0[3:0]}) * 40'd5;\n\
+             always @(posedge clk) q <= w;\n  assign y = q;\n",
+            1,
+        ),
+    ];
+    let out = scratch("small-terms");
+    let mut wrong = Vec::new();
+    for (name, y, body, blocks) in cases {
+        let here = out.join(name);
+        std::fs::create_dir_all(&here).unwrap();
+        let source = here.join("source.v");
+        std::fs::write(&source, format!("{}{body}endmodule\n", head(y))).unwrap();
+        let tb = here.join("tb.v");
+        std::fs::write(&tb, staged_tb(17, 17, y)).unwrap();
+        let netlist = map(&source, "staged", &here);
+        let mapped = std::fs::read_to_string(&netlist).unwrap();
+        assert_eq!(mapped.matches("DSP48E1 #(").count(), blocks, "{name}");
+        let want = simulate(&[source.clone(), tb.clone()]);
+        let mut files = libraries(&dir);
+        files.push(netlist);
+        files.push(tb);
+        let got = simulate(&files);
+        let known = want.iter().filter(|l| !l.contains('x')).count();
+        assert!(known * 2 > want.len(), "{name}: {known} known");
+        let at = want
+            .iter()
+            .zip(&got)
+            .position(|(x, y)| !x.contains('x') && x != y);
+        if want.len() != got.len() || at.is_some() {
+            wrong.push(format!(
+                "{name}: at {at:?}: {:?} against {:?}",
+                at.map(|i| &want[i]),
+                at.map(|i| &got[i])
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 // ---------------------------------------------------------------------------
 // The bits against Vivado's
 // ---------------------------------------------------------------------------

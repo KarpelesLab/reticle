@@ -6324,6 +6324,34 @@ Each is the same function at a cost, or registers somewhere else. Each is named 
 register now in the block, is left. That is the flow's clean-up working a word at a
 time and not this block's. Nine lookup tables against seven is the parity tree's.
 
+### A sum with a product too small for a block (fixed 2026-11-27)
+
+`wire [15:0] w = (a + b) * 16'd5 + (c + d) * 16'd4;`, from the AAC decoder's work,
+mapped with a note that "a sum of products ending at `w` could not be taken into its
+blocks" and then failed on sixteen undriven bits of `w`. Two faults, and either was
+enough:
+
+- `dsp_fold::find` asked whether a product goes on a block at all (`product_is`, the
+  `smallest` rule and the plan) only for a term whose net was narrower than the sum,
+  where it needed the answer for the extension. Here every net was 16 bits, so the
+  question was never asked, and both `5x4` multiplies became a chain. Now it is asked
+  of every term; one the block will not take is the lowest block's addend on `C` if it
+  is the only such thing, and otherwise the sum stays in the fabric.
+- `fold_dsps` met the refusal on the first block, wrote the note, and still removed the
+  sum's adders, leaving `w` with no driver. The code's comment said it "cannot happen
+  while `dsp_folds` and `dsp` ask the same question", which was true and was the bug:
+  they did not. Now a refusal before any block is built keeps the adders, and one
+  after (which would leave a sum short of a term) is an error at the sum's source line
+  and not a note.
+
+`a_sum_with_a_product_too_small_for_a_block_is_still_driven` maps that sum and one with
+a product a block takes beside one it does not, and simulates both against the source.
+It was failing before the fix. **What it does not catch:** either fix alone makes it pass
+(checked with the first taken out; with the second taken out the sum is never a chain,
+so the path it guards is not reached), so it guards against both going back and not
+against either; and the error path for a half-built chain is reached by nothing,
+since no design is known that makes the two disagree now.
+
 ### Inference is on, and what that did to the Husky
 
 `--bitstream` on the 7 series now infers. **The Husky Plus and the plain Husky use no

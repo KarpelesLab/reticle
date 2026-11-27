@@ -166,8 +166,13 @@ fn extension_fits(
 
 /// Finds the sums the device's block can take.
 ///
-/// A multiply `product_is` says does not go on one block is one no sum holding it
-/// can take.
+/// A multiply `product_is` says does not go on one block is not a term: it is
+/// what the lowest block adds, if it is the only such thing, and otherwise the sum
+/// stays in the fabric. That is asked of every term, and not only of one whose
+/// extension needs it: a product held in a net as wide as the sum used to skip
+/// the question, so that `(a + b) * 5 + (c + d) * 4` became a chain whose first
+/// block the multiply, too small for one, then refused, and the sum was left
+/// undriven (`docs/fpga-vivado-parity.md`).
 pub(super) fn find(module: &Module, uses: &[usize], product_is: ProductIs<'_>) -> Vec<Fold> {
     let mut driver = std::collections::HashMap::new();
     for (id, cell) in module.cells.iter() {
@@ -242,6 +247,7 @@ pub(super) fn find(module: &Module, uses: &[usize], product_is: ProductIs<'_>) -
                     if let Some((mul, stage_clock)) =
                         product_behind(module, uses, &driver, read.net)
                         && !taken.contains(&mul)
+                        && product_is(module, mul).is_some()
                         && extension_fits(module, read, width, product_is, mul)
                     {
                         // One clock for the whole chain, since each block has

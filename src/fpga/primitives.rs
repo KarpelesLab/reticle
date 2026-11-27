@@ -5342,14 +5342,34 @@ impl Mapper<'_> {
             *uses = net_use_counts(module);
         }
         if !ok {
-            // A multiply that a check above found fit no longer does: nothing
-            // this function has built can stand, and the module would be left
-            // holding half a chain. It cannot happen while `dsp_folds` and `dsp`
-            // ask the same question.
-            self.note(format!(
-                "a sum of products ending at `{}` could not be taken into its blocks",
-                module.nets[fold.root].name
-            ));
+            // A multiply that `dsp_folds` found fit, `dsp` refused. Before any
+            // block is built nothing is lost: the sum's adders stay, and with
+            // them what drives the sum. After one is, the products it took are
+            // gone and the sum cannot be what the source says, so the build
+            // stops here, at the source line, rather than going on to an
+            // undriven net or a sum short of a term. Neither can happen while
+            // the two ask the same question, which they once did not: `dsp_fold`
+            // has the story.
+            let name = module.nets[fold.root].name.as_str().to_owned();
+            if mapped.is_empty() {
+                self.note(format!(
+                    "a sum of products ending at `{name}` stays in logic: its first \
+                     product goes on no block"
+                ));
+                return (Vec::new(), Vec::new());
+            }
+            self.diags.push(
+                Diagnostic::error(format!(
+                    "internal error: the sum of products ending at `{name}` was taken into \
+                     {} DSP block(s) and then a product of it was refused",
+                    mapped.len()
+                ))
+                .with_span(span)
+                .with_note(
+                    "the sum would be built short of a term; this is a bug in the flow, \
+                     not in the design",
+                ),
+            );
         }
         let Some(product) = product else {
             return (removed, mapped);
