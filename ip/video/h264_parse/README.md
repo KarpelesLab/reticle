@@ -198,14 +198,28 @@ header counts them).
 
 ## Timing
 
-**9.53 ns routed, at speed grade 2**, on `xc7a100t-fgg484` (the target
-XC7A100T-2FGG484I's own device file): `reticle fpga --device
-xc7a100t-fgg484 --timing-driven --bitstream`, a 10 ns clock and the 47
-ports on banks 34 and 35. So 100 MHz closes with half a nanosecond to spare
-— by Reticle's delay model fitted to Vivado's, not by Vivado, and not on a
-part. The bitstream it wrote decodes back completely: 394 476 bits, none
-unexplained, and the interconnect they select is exactly what the router
-chose.
+**About 10 ns routed, at speed grade 2, and which side of 10 depends on
+the placement**, on `xc7a100t-fgg484` (the target XC7A100T-2FGG484I's own
+device file): `reticle fpga --device xc7a100t-fgg484 --timing-driven
+--bitstream`, a 10 ns clock and the 47 ports on banks 34 and 35. The
+committed RTL, measured by Reticle's delay model fitted to Vivado's (not
+by Vivado, and not on a part):
+
+| `--place-seed` | routed |
+|---|---|
+| 1 (the default) | 10.29 ns |
+| 2 | 10.55 ns |
+| 3 | **9.91 ns** |
+
+So 100 MHz closes with seed 3 and misses by up to half a nanosecond
+without it. The latest path of the default build runs from the state
+register through the decode of `go` to the enables of `h264_cavlc`'s
+registers, with three long hops in it: placement, not depth. The RTL one
+change before the committed one (the `MB_TYPE` prediction bits of P_8x8,
+above) routed at 9.53 ns with seed 1, which is the same spread seen from
+the other side. Every bitstream of these decodes back completely -- the
+seed-3 one is 392 608 bits, none unexplained, and the interconnect they
+select is exactly what the router chose.
 
 It took six rounds, each found by reading the latest path the router
 reported, and the path to the answer is the useful part:
@@ -217,7 +231,7 @@ reported, and the path to the answer is the useful part:
 | 3 | leading zeros as a tree, not a 32-step priority chain; a CAVLC level in three steps; bytes zeroed as they are consumed instead of a mask on the window | 12.6 ns |
 | 4 | `consume` latched with the decode, so it is a function of registers and the output slot only | 12.9 ns |
 | 5 | a read past a NAL unit's end flagged by the bit reader and reported a state later, instead of compared before consuming | 11.3 ns |
-| 6 | ue(v) by selecting one of sixteen fixed fields rather than shifting; se(v) from codeNum + 1 at 17 bits, the long path's values made in its own state; the nC walk latched a cycle before a block starts | **9.53 ns** |
+| 6 | ue(v) by selecting one of sixteen fixed fields rather than shifting; se(v) from codeNum + 1 at 17 bits, the long path's values made in its own state; the nC walk latched a cycle before a block starts | **9.53 ns** (seed 1; the committed RTL: 9.9 to 10.6 by seed) |
 
 Round 4 is not a regression worth worrying about: the path it removed was
 replaced by the next one down, which round 5 then cut. Round 1's path was
@@ -230,7 +244,7 @@ nine times inside the budget on the streams 720p30 actually sends.
 
 ## Resources
 
-On `xc7a100t-fgg484`, from the same build (`--report`): **6 637 LUTs**
+On `xc7a100t-fgg484`, from the same build (`--report`): **6 638 LUTs**
 (10.5 % of the part's 63 400), **1 929 flip-flops** (1 885 `FDCE`, 44
 `FDPE`), 194 `CARRY4`, 221 `MUXF7` and 87 `MUXF8`, **3 `RAMB36E1` and 1
 `RAMB18E1`**, no DSP. Mapped logic depth 12.
@@ -260,4 +274,7 @@ another decoder.
   4:2:2 and 4:4:4, high bit depth, scaling matrices.
 - `level_prefix` 17 to 19, which a High profile stream at very low QP may
   use: the window is 32 bits and the code is up to 36.
+- Timing has no margin: 9.9 to 10.6 ns by placement seed. The next cut
+  is the fan-out of `go` into `h264_cavlc`'s enables, which a registered
+  copy of the S_RESW decode would take off the state register's path.
 - Nothing here has run on a part.
