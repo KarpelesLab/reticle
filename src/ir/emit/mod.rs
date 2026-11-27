@@ -35,6 +35,7 @@
 //! Any other expression (an operator, a memory read, a call) is an error:
 //! the netlist formats are for synthesised designs.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
@@ -852,9 +853,10 @@ impl<'a> BitView<'a> {
             konst: vec![None; n],
             lowest: (0..n).collect(),
         };
+        let mut walk = Walk::new(usize::MAX);
         for assign in &module.assigns {
             let targets = view.lvalue_slots(&assign.target, assign.span)?;
-            let values = view.expr_bits(assign.value)?;
+            let values = view.walk_bits(assign.value, &mut walk)?;
             if targets.len() != values.len() {
                 return Err(EmitError::new(
                     assign.span,
@@ -1022,6 +1024,38 @@ impl<'a> BitView<'a> {
     /// indices, concatenations, replications and resizes of structural
     /// expressions. Anything else is an error pointing at the expression.
     pub fn expr_bits(&self, id: ExprId) -> Result<Vec<SigBit>, EmitError> {
+        self.walk_bits(id, &mut Walk::new(usize::MAX))
+    }
+
+    /// [`Self::expr_bits`], each expression expanded once per walk.
+    ///
+    /// An expression is a DAG, and a tree walk of one visits a shared operand
+    /// once for every path to it. Synthesis makes exactly that of a loop writing
+    /// part of a vector: `f[8 * i +: 8] = ...` for `i` in `0..14` is fourteen
+    /// versions of `f`, each a concatenation reading the one before twice (the
+    /// bits above the part and the bits below, as `reticle synth` prints such a
+    /// loop), so the fourteenth is `2^14` paths deep. `h264_intra` has such
+    /// loops, and `--memories vivado` builds a view of the module before block
+    /// RAM mapping (`clock_registered_reads`): the tree walk did not finish it
+    /// in 40 minutes, and with each expression's bits kept the module maps in
+    /// four seconds.
+    fn walk_bits(&self, id: ExprId, walk: &mut Walk) -> Result<Vec<SigBit>, EmitError> {
+        walk.visits += 1;
+        if walk.visits > walk.budget {
+            return Err(EmitError::new(
+                self.module.exprs[id].span,
+                "expression is too large to expand",
+            ));
+        }
+        if let Some(bits) = walk.memo.get(&id) {
+            return Ok(bits.clone());
+        }
+        let bits = self.expand(id, walk)?;
+        walk.memo.insert(id, bits.clone());
+        Ok(bits)
+    }
+
+    fn expand(&self, id: ExprId, walk: &mut Walk) -> Result<Vec<SigBit>, EmitError> {
         let expr = &self.module.exprs[id];
         let span = expr.span;
         match &expr.kind {
@@ -1038,7 +1072,7 @@ impl<'a> BitView<'a> {
                         "an array slice cannot be a netlist connection",
                     ));
                 }
-                let bits = self.expr_bits(*base)?;
+                let bits = self.walk_bits(*base, walk)?;
                 let (lo, hi) = (*lo as usize, *hi as usize);
                 if hi < lo || hi >= bits.len() {
                     return Err(EmitError::new(span, "slice is outside its operand"));
@@ -1052,7 +1086,7 @@ impl<'a> BitView<'a> {
                         "an array element cannot be a netlist connection",
                     ));
                 }
-                let bits = self.expr_bits(*base)?;
+                let bits = self.walk_bits(*base, walk)?;
                 let i = self.const_index(*index, span)?;
                 Ok(vec![bits.get(i).copied().unwrap_or(SigBit::Const(Bit::X))])
             }
@@ -1062,7 +1096,7 @@ impl<'a> BitView<'a> {
                 width,
                 up,
             } => {
-                let bits = self.expr_bits(*base)?;
+                let bits = self.walk_bits(*base, walk)?;
                 let off = self.const_index(*offset, span)?;
                 let w = *width as usize;
                 let lo = if *up {
@@ -1077,12 +1111,12 @@ impl<'a> BitView<'a> {
             ExprKind::Concat(parts) => {
                 let mut out = Vec::new();
                 for part in parts.iter().rev() {
-                    out.extend(self.expr_bits(*part)?);
+                    out.extend(self.walk_bits(*part, walk)?);
                 }
                 Ok(out)
             }
             ExprKind::Replicate { count, expr } => {
-                let bits = self.expr_bits(*expr)?;
+                let bits = self.walk_bits(*expr, walk)?;
                 Ok(bits.repeat(*count as usize))
             }
             ExprKind::Resize {
@@ -1097,7 +1131,7 @@ impl<'a> BitView<'a> {
                         "a resize of a non-vector cannot be a netlist connection",
                     ));
                 }
-                let mut bits = self.expr_bits(*inner)?;
+                let mut bits = self.walk_bits(*inner, walk)?;
                 let w = *width as usize;
                 let fill = if *signed && operand.ty.is_signed() {
                     bits.last().copied().unwrap_or(SigBit::Const(Bit::Zero))
@@ -1126,6 +1160,25 @@ impl<'a> BitView<'a> {
             .into_iter()
             .map(|b| self.canonical(b))
             .collect())
+    }
+}
+
+/// One expansion's expressions already expanded, and how many visits it has
+/// made and may make: the budget is what lets a test see a walk go
+/// exponential as a failure rather than a hang.
+struct Walk {
+    memo: HashMap<ExprId, Vec<SigBit>>,
+    visits: usize,
+    budget: usize,
+}
+
+impl Walk {
+    fn new(budget: usize) -> Self {
+        Walk {
+            memo: HashMap::new(),
+            visits: 0,
+            budget,
+        }
     }
 }
 
@@ -1302,6 +1355,44 @@ mod tests {
         assert!(!view.is_representative(8));
         assert!(!view.is_representative(10));
         assert_eq!(view.module().name, "m");
+    }
+
+    /// **A shared operand is expanded once.** Each of 48 versions of a vector
+    /// reads the one before twice, as synthesis writes a loop that sets part
+    /// of a vector, so a walk of the tree is `2^48` visits deep. Counted, with a
+    /// budget, so a walk gone exponential again fails here at once instead of
+    /// hanging the suite. Would not catch an expansion that is linear but slow.
+    #[test]
+    fn bit_view_expands_a_shared_operand_once() {
+        const VERSIONS: usize = 48;
+        let span = span();
+        let mut b = ModuleBuilder::new("m", span);
+        let a = b.input("a", Type::bits(16));
+        let mut v = b.net(a);
+        for k in 0..VERSIONS {
+            let hi = b.slice(v, 15, 8);
+            let lo = b.slice(v, 7, 0);
+            // Swapping the halves each time, so the bits are worth checking.
+            v = if k % 2 == 0 {
+                b.concat(vec![lo, hi])
+            } else {
+                b.concat(vec![hi, lo])
+            };
+        }
+        // Not assigned: `BitView::new` walks with no budget, and would hang
+        // where this walk fails.
+        let module = b.finish();
+        let view = BitView::new(&module).unwrap();
+        let mut walk = Walk::new(10 * VERSIONS);
+        let bits = view.walk_bits(v, &mut walk).unwrap();
+        // Three expressions a version, and the slices' second visit to it.
+        assert!(walk.visits <= 4 * VERSIONS + 1, "{} visits", walk.visits);
+        // 48 swaps are none.
+        let a_bits = view.net_bits(a, span).unwrap();
+        assert_eq!(
+            bits.iter().map(|b| view.canonical(*b)).collect::<Vec<_>>(),
+            a_bits
+        );
     }
 
     #[test]

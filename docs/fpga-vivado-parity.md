@@ -3861,6 +3861,23 @@ All behind `--memories vivado`, the default on the 7 series (`MapOptions::vivado
    are then four copies of the memory, as Vivado's four blocks. The synthesis still
    writes the loop as four reads on no clock and a nest of the register's bits; the
    frontend is not touched.
+
+   *That nest is what made this step hang on `h264_intra`* (found 2026-11-27). To find
+   which bits a register loads, the step views the whole module bit by bit
+   (`ir::emit::BitView`), and that view expanded each expression as a tree. Synthesis
+   writes a loop that sets part of a vector, `f[8 * i +: 8] = ...`, as a version of `f`
+   per pass reading the one before twice, the bits above the part and the bits below,
+   so a tree walk of the last of fourteen passes is `2^14` paths. `h264_intra`'s
+   Intra_4x4 averages are such loops, and with `--memories vivado`, the default, the
+   flow did not finish mapping it in 40 minutes, where `--memories legacy`, which skips
+   this step, took 6 seconds. The recon agent narrowed it to that path by taking things
+   out of the design; the cause was found by backtraces of the running flow, every one
+   in `BitView::expr_bits` under `clock_registered_reads`. The view now keeps each
+   expression's bits once a walk has them, and the module maps in 4 seconds; the whole
+   `h264_recon` maps with the default in 29 seconds.
+   `bit_view_expands_a_shared_operand_once` counts the visits of a walk over 48 such
+   versions, under a budget, so a walk gone exponential again fails at once rather than
+   hanging; it was checked to fail with the memo taken out.
 5. **The clock** (`Mapper::lutram_by_clock`): one write and one read, not registered
    again, 32 kbit or less, up to 1,024 words, under a declared clock of 3.5 ns or less,
    is distributed RAM. Not at 2,048 words, where Vivado moves it at 3.2 ns: built so here

@@ -190,7 +190,14 @@ in 40 minutes, and the cause was narrowed, by removing one thing at a
 time, to its Intra_4x4 path through the registered two- and three-tap
 averages; with `legacy` the same module maps in 6 seconds. Every other
 module maps either way. That is a fault of the flow on this input, not
-yet found.
+yet found. *Found since (2026-11-27):* the step that only `vivado` runs
+viewed the module bit by bit by walking each expression as a tree, and
+those loops' part-writes make a version of the vector per pass that reads
+the one before twice, so the walk doubled with every pass
+(`docs/fpga-vivado-parity.md`, "Deeper than a block"). With the walk fixed
+the default maps `h264_intra` in 4 seconds and the whole of `h264_recon`
+in 29, at 24 056 LUT6s against 24 086 with `legacy`; the figures above
+are still `legacy`'s.
 
 **Not measured: the routed delay.** The 10 levels are the mapped
 netlist's; a placed and routed figure needs the package's pins assigned
