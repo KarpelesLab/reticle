@@ -3310,7 +3310,7 @@ Measured on `xc7a100t-ftg256`, before and after:
 | `n[8 * i + 8 +: 8] = d`, 136 bits | 3,349 | 128 |
 | `n[128 * r + 32 * w +: 32] = d`, 512 bits | 49,713 | 512 |
 | `v[8 * i + 8 +: 8] <= d`, a register | 3,349 | 16 |
-| `h264_deblock` as first written (`9c6ee118`) | 205,796 (its author's figure) | 9,419 |
+| `h264_deblock` as first written (`9c6ee118`) | 205,796 | 9,419 |
 
 For a read, the shapes before are left as they were: a plain index, a
 power-of-two stride, a non-power-of-two one, and a sum whose values repeat
@@ -3321,6 +3321,11 @@ writes at places that read eight bits or fewer, `r[i +: 4]` with a plain
 row above but the last and simulates the netlist against the source, the
 source through the simulator's own reading of the select. The last row is
 not a test: the deblocker's old source is in the history, not the tree.
+Its *before* was measured again with the flow of the commit before, and
+agrees with its author's figure; that build also failed, on a sum of
+products left undriven (`lb_addr`), the fault `fpga-vivado-parity.md`'s "A
+sum with a product too small for a block" describes, and the *after* is
+with that fixed. The 9,419 is the mapped netlist's, not a placed one.
 An array element `a[i]` at a computed index is not part of this; a
 register array that is not a memory reached the mapper as a multiplexer
 already (`a[i + 1]` and `a[2 * i + 3]` of sixteen bytes, 217 lookup
