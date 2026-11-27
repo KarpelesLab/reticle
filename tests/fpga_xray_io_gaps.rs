@@ -193,20 +193,17 @@ fn bitstream(name: &str, source: &str, xdc: &str, root: &str) -> (Output, Vec<St
     (out, lines)
 }
 
-/// **An `ODDR` on the pad of a single-pad IO tile routes**, on both of bank
-/// 35's (`F4`, `IO_0`, the top tile's `_Y1` half; `L6`, `IO_25`, the bottom
-/// tile's `_Y0`), clocked from a global buffer and from the fabric. It did not:
-/// both halves of a `_SING` tile's `OLOGIC` were declared on its one set of
-/// wires, so the pad did not decide which the `ODDR` took and it was placed
-/// in another tile; and the pips into the `OLOGIC`'s clock had no bits under
-/// the `_SING` tile's wire names. Would catch either coming back, as a build
-/// that does not route, and the register on the wrong half, as a feature the
-/// tile does not have. **Would not catch** clock pip bits that are wrong on
-/// silicon: they are the two-pad tile's, by a reading of the names that no
-/// Vivado bitstream has confirmed (`xray::single_io_clock_pip`), and the
-/// decode reads them back through the same reading.
+/// **An `ODDR` on the pad of a single-pad IO tile is refused before placing,
+/// with the ball; a plain output there still builds.** Both of bank 35's
+/// (`F4`, `IO_0`; `L6`, `IO_25`), clocked from a global buffer and from the
+/// fabric. It used to place the `ODDR` in another tile and fail in the router;
+/// the clock pips such a register needs have no bits under the tile's own wire
+/// names (`xray::check_single_pad_registers`). Would catch the refusal lost, or
+/// moved after placing, and a plain output on such a ball refused with it.
+/// Would not catch the refusal being needless, should the pips turn out to be
+/// the two-pad tile's after all: that needs a Vivado bitstream nobody here has.
 #[test]
-fn an_oddr_on_a_single_pad_tile_routes() {
+fn an_io_register_on_a_single_pad_tile_is_refused_with_its_ball() {
     let Some(root) = chipdb() else { return };
     let fabric = "module top (input wire clk, input wire d, output wire q);\n\
                   ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b0)) od (\n\
@@ -215,11 +212,10 @@ fn an_oddr_on_a_single_pad_tile_routes() {
                   wire g;\n  BUFG bg (.I(clk), .O(g));\n\
                   ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b0)) od (\n\
                   .Q(q), .C(g), .CE(1'b1), .D1(d), .D2(d), .R(1'b0), .S(1'b0));\nendmodule\n";
+    let plain = "module top (input wire clk, input wire d, output reg q);\n\
+                 always @(posedge clk) q <= d;\nendmodule\n";
     let mut wrong = Vec::new();
-    for (ball, tile, half) in [
-        ("F4", "RIOI3_SING_X57Y149", "OLOGIC_Y1"),
-        ("L6", "RIOI3_SING_X57Y100", "OLOGIC_Y0"),
-    ] {
+    for ball in ["F4", "L6"] {
         let xdc = format!(
             "set_property -dict {{PACKAGE_PIN H4 IOSTANDARD LVCMOS33}} [get_ports clk]\n\
              set_property -dict {{PACKAGE_PIN B2 IOSTANDARD LVCMOS33}} [get_ports d]\n\
@@ -227,26 +223,23 @@ fn an_oddr_on_a_single_pad_tile_routes() {
         );
         for (clock, source) in [("fabric", fabric), ("global", global)] {
             let name = format!("single-{ball}-{clock}");
-            let (out, decoded) = bitstream(&name, source, &xdc, &root);
+            let (out, _) = bitstream(&name, source, &xdc, &root);
             let log = text(&out);
-            if !out.status.success() {
-                wrong.push(format!("{name}: {log}"));
-                continue;
+            let said = format!(
+                "`od` (ODDR) is the IO register of ball {ball}, which is on a single-pad IO tile"
+            );
+            if out.status.success() || !log.contains(&said) {
+                wrong.push(format!("{name}: not refused as it should be:\n{log}"));
             }
-            if !log.contains(" 0 bit(s) unexplained") {
-                wrong.push(format!("{name}: bits unexplained: {log}"));
+            if log.contains("placed on real sites") || log.contains("router") {
+                wrong.push(format!("{name}: refused after placing:\n{log}"));
             }
-            let here = |feature: &str| {
-                decoded
-                    .iter()
-                    .any(|l| l.starts_with(tile) && l.contains(feature))
-            };
-            if !here(&format!("{half}.OQUSED")) {
-                wrong.push(format!("{name}: no `{half}.OQUSED` on `{tile}`"));
-            }
-            if !here("IOI_OCLK_0.") {
-                wrong.push(format!("{name}: no clock pip into `{tile}`"));
-            }
+        }
+        let name = format!("single-{ball}-plain");
+        let (out, _) = bitstream(&name, plain, &xdc, &root);
+        let log = text(&out);
+        if !out.status.success() || !log.contains(" 0 bit(s) unexplained") {
+            wrong.push(format!("{name}: a plain output did not build:\n{log}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

@@ -4594,6 +4594,7 @@ fn write_xc7_bitstream(
     check_driverless(&netlist)?;
     reticle::fpga::xray::check_regional_wiring(&netlist)?;
     reticle::fpga::xray::check_serdes_wiring(&netlist)?;
+    reticle::fpga::xray::check_single_pad_registers(&netlist, &fabric.arch, &graph)?;
     // A carry generate left on its lane's bypass input is a signal nothing
     // drives from here on, so that the placer keeps the input for it, and is
     // tied after routing. See `xray::tie_bypass_generates`.

@@ -198,6 +198,64 @@ pub(super) fn measured_features(tile_type: &str) -> Vec<super::Feature> {
     out
 }
 
+/// An IO register (`IDDR`, `ODDR`, a serialiser) on the pad of a `_SING` IO
+/// tile, refused before anything is placed, with the ball. The tile's
+/// `OLOGIC` and `ILOGIC` are placed beside the pad since 2026-11-27
+/// (`parse::bels_of`), but the pips into their clocks are named in the tile's
+/// own wires (`IOI_SING_LEAF_GCLK<n>`) and given bits only in the two-pad
+/// tile's (`IOI_LEAF_GCLK<n>`), so nothing would clock the register and the
+/// router would say so only after placing. Taking the two-pad tile's bits for
+/// them was tried, and routed: it is a reading of the names no Vivado
+/// bitstream has confirmed, and the extra pips moved five of the probes
+/// `tests/fpga_xray_placed.rs` holds to Vivado's bitstreams, so it was not
+/// kept (`docs/fpga-xray.md`, "An `ODDR` on a `_SING` pad").
+///
+/// # Errors
+///
+/// The refusal, naming the register, the ball and the tile.
+pub fn check_single_pad_registers(
+    netlist: &Netlist,
+    arch: &crate::fpga::arch::Arch,
+    graph: &RoutingGraph,
+) -> Result<(), String> {
+    for io in netlist.instances.iter().filter(|i| i.kind == "io") {
+        let Some(ball) = &io.pin else { continue };
+        let Some(site) = arch.site_of_pin(ball).and_then(|s| graph.site_index(s)) else {
+            continue;
+        };
+        let tile_type = &arch.tile_types[graph.sites[site].tile_type].name;
+        if !tile_type.contains("_SING") {
+            continue;
+        }
+        // An IO register beside the buffer: an instance of the IO logic's
+        // kinds on a signal the buffer drives or reads.
+        let register = io
+            .pins
+            .iter()
+            .filter_map(|p| netlist.pins[*p].signal)
+            .flat_map(|s| {
+                let signal = &netlist.signals[s];
+                signal
+                    .driver
+                    .into_iter()
+                    .chain(signal.sinks.iter().copied())
+            })
+            .map(|p| &netlist.instances[netlist.pins[p].instance])
+            .find(|i| matches!(i.kind.as_str(), "ddr_in" | "ddr_out"));
+        if let Some(register) = register {
+            return Err(format!(
+                "`{}` ({}) is the IO register of ball {ball}, which is on a single-pad IO tile \
+                 (`{tile_type}`): the database names that tile's clock pips in another tile's \
+                 wires, so this flow cannot clock an IO register there. Put the signal on \
+                 another ball, or its register in the fabric (docs/fpga-xray.md, \
+                 \"An `ODDR` on a `_SING` pad\")",
+                register.name, register.primitive
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What Vivado refuses of the fabric around a serialiser, before anything
 /// is placed: `OFB` read by anything but the `ISERDESE2` beside it, or `TFB`
 /// straight into a flip-flop that drives a pad (`THRU-2`, `oserdes_ofb_fabric`,

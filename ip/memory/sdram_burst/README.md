@@ -375,10 +375,10 @@ so that it can be fixed rather than rediscovered:
    driver of `sclk` to `sclk$io0.I[0]`", for a plain output as much as
    for a three-state one. The constraints leave those balls out. **A board
    for this controller should not put an SDRAM signal on an `IO_0` or
-   `IO_25` ball** until the flow can. *Routes since (2026-11-27), but its
-   clock pips are a reading of the database's names that nothing has
-   measured: `docs/fpga-xray.md`, "An `ODDR` on a `_SING` pad". The advice
-   stands.*
+   `IO_25` ball** until the flow can. *Refused while mapping since
+   (2026-11-27), naming the ball: the clock pips such a register needs are
+   not described for those tiles (`docs/fpga-xray.md`, "An `ODDR` on a
+   `_SING` pad"). The advice stands.*
 4. **Logic clocked from a PLLE2's CLKOUT0 is in no domain of the timing
    estimate**: the controller on CLKOUT0 was reported as "clk_in 0.00 ns
    of 20 ns", and moved to CLKOUT1 it is timed. The design uses CLKOUT1
