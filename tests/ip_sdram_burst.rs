@@ -1561,9 +1561,9 @@ fn random_traffic_on_four_ports() {
     // Each port writes only rows of its own, a few in every bank so that
     // rows collide within a bank, and reads its own rows and the rows
     // nobody writes.
-    for p in 0..4usize {
-        b.ports[p].stall_cmd = 20;
-        b.ports[p].stall_wr = 15;
+    for (p, port) in b.ports.iter_mut().enumerate() {
+        port.stall_cmd = 20;
+        port.stall_wr = 15;
         for _ in 0..120 {
             let bank = rng.below32(4);
             let r = if rng.chance(25) {
@@ -1580,7 +1580,7 @@ fn random_traffic_on_four_ports() {
                     read_req(addr, len)
                 }
             };
-            b.ports[p].pending.push_back(r);
+            port.pending.push_back(r);
         }
     }
     let cycles = b.drain(400_000);
@@ -1892,8 +1892,7 @@ fn motion_compensation_fetches() {
 /// read checked.
 fn random_load(b: &mut Bench<'_>, seed: u64, per_port: usize) {
     let mut rng = Rng(seed);
-    let n = b.ports.len();
-    for p in 0..n {
+    for (p, port) in b.ports.iter_mut().enumerate() {
         for _ in 0..per_port {
             let own = rng.below32(4) * 4 + n32(p) * 16 + 500;
             let bank = rng.below32(4);
@@ -1903,7 +1902,7 @@ fn random_load(b: &mut Bench<'_>, seed: u64, per_port: usize) {
             } else {
                 read_req(addr, len)
             };
-            b.ports[p].pending.push_back(r);
+            port.pending.push_back(r);
         }
     }
 }
@@ -1985,7 +1984,7 @@ fn display_latency(prio: u32, pace: u64) -> (u64, f64, u64) {
     let mut b = Bench::new(&d, cfg);
     b.init(5_000);
     let mut rng = Rng(11);
-    for p in 0..3usize {
+    for port in &mut b.ports[..3] {
         for _ in 0..400 {
             let row = rng.below32(64) + 1000;
             let addr = (row << 11) | ((rng.below32(4)) << 9) | (rng.below32(32) * 16);
@@ -1994,7 +1993,7 @@ fn display_latency(prio: u32, pace: u64) -> (u64, f64, u64) {
             } else {
                 read_req(addr, 15)
             };
-            b.ports[p].pending.push_back(r);
+            port.pending.push_back(r);
         }
     }
     let mut next = b.cycle;
