@@ -7,6 +7,201 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/KarpelesLab/reticle/compare/v0.0.8...v0.0.9) - 2026-11-28
+
+### Added
+
+- *(ip)* h264_recon writes through sdram_burst's frame_addr
+- *(ip)* h264_tokin reads h264_mvpred's MV token as documented
+- *(ip)* h264_recon decodes tokens to SDRAM end to end
+- *(ip)* h264_recon's deblocking filter over macroblocks
+- *(ip)* h264_recon's intra prediction and picture construction
+- *(ip)* h264_recon's deblocking filter, inverse transforms and scaling
+- *(ip)* aac_dec, an AAC-LC decoder checked against its model and ffmpeg
+- *(ip)* aac_dec's clean-room model, codebooks and bitstream parser
+- *(ip)* h264_parse, the H.264 syntax parser
+- *(ip)* sdram_burst, a burst SDRAM controller for the W9825G6KH
+- *(tools)* CABAC, B slices and the 8x8 transform in the H.264 model
+- *(tools)* a clean-room H.264 decoder model, bit-exact with ffmpeg, and its dumps
+- *(ip)* h264_inter meets 100 MHz at -2, and both blocks' handshakes are registers
+- *(ip)* h264_inter's reference cache keeps a valid bit per word
+- *(ip)* h264_inter, quarter-sample luma and eighth-sample chroma motion compensation
+- *(ip)* h264_mvpred, the motion vectors of H.264 clause 8.4.1 in the token stream
+- *(fpga)* add the XC7A100T in the FGG484 package
+- *(program)* reconnect across an Apollo re-enumeration when loading an ECP5
+- *(fpga)* a BUFMRCE's bits in each row it drives, and a pad road's USED
+- *(fpga)* answer the Ledger SE's MCU-flash probes from fabric
+- *(fpga)* close the primitive ledger's last classes against Vivado
+- *(fpga)* the UltraPlus's other hard IP, warm boot, PLL pad forms, DSP timing
+- *(fpga)* every iCE40 die on its real fabric
+- *(fpga)* timing analysis and timing-driven place and route for the iCE40UP5K
+- *(fpga)* write a DRP block's frames with Vivado's ECC
+- *(fpga)* ground a clock manager's open CLKIN2 and clocks as Vivado does
+- *(fpga)* tie a BUFGCE's I1 to one as Vivado does
+- *(fpga)* drive an IO register's OCLKM from its OCLK's clock
+- *(fpga)* set the clock rows' and rebuffers' bits by Vivado's rules
+- *(fpga)* the iCE40UP5K's PLL and oscillators, measured against the board's crystal
+- *(fpga)* the iCE40UP5K's eight DSP blocks, checked against a model on the board
+- *(fpga)* block RAM and single-port RAM on the real iCE40UP5K
+- *(fpga)* place, route and write a bitstream on the real iCE40UP5K
+- *(fpga)* an iCE40UP5K-SG48 device file
+- *(fetch)* Project IceStorm's iCE40 database, from Debian's package
+- *(program)* iCE40 SPI configuration and flash over FT2232H MPSSE
+- *(fpga)* give a route's late cells other bels of their tiles
+- *(cynthion)* a bare smart card on PMOD A, as a USB serial port
+- *(fpga)* time a distributed RAM's write address as Vivado does
+- *(fpga)* charge the clock's pessimism between regions as Vivado does
+- *(fpga)* charge a wire's branches as Vivado's timer does
+- *(fpga)* time tables, the clock's margin and a DSP chain as Vivado does
+- *(fpga)* time a register by its bel while placing it
+- *(fpga)* charge every MUX output's sinks as Vivado does
+- *(fpga)* charge a 5FF's MUX output to its launch
+- *(fpga)* route for each path group's latest path, met or not
+- *(fpga)* write the placement's estimate beside the routed one
+- *(xray)* give Vivado a counter's propagate as a way through, no cell
+- *(xray)* tie a carry generate to ground on the bypass input, as Vivado does
+- *(place)* refuse a finished placement that double-books a slice wire
+- *(fpga)* time the 7-series fitted model at the part's speed grade
+- *(fpga)* when the clock reaches each register of the XC7A35T, measured
+- *(fpga)* give a late lookup table's inputs as Vivado gives them
+- *(fpga)* deep memories and single ports as Vivado builds them
+- *(verilog)* dynamic arrays and queues
+- *(verilog)* recursive subroutines called at run time, inlined to a depth
+- *(sim)* force and release a bit- or part-select of a net
+- *(verilog)* call a function or task of an instance below
+- *(verilog)* %p of packed arrays and arrays of more than one dimension
+- *(verilog)* unpacked arrays in subroutines, as slices and as results
+- *(verilog)* interfaces and parameters as the instance gives them
+- *(verilog)* unpacked structs, each member keeping its type
+- *(verilog)* nets, primitives and hierarchy as xsim builds them
+- *(verilog)* simulate what xsim simulates, for 118 more of the corpus
+- *(sim)* %p prints a value's structure as xsim does
+- *(verilog)* $typename
+- *(sim)* $countones, $countbits, $onehot, $onehot0 and $isunknown
+- *(sim)* $printtimescale prints the scope's time unit and precision
+- *(vhdl)* std.textio writes to the standard output
+- *(vhdl)* arrays of more than one dimension
+- *(vhdl)* bundle ieee.numeric_std_unsigned
+- *(vhdl)* aggregates of vectors, a signed 'value, a scalar against a vector
+- *(sim)* inertial delay, marked on the IR's delay, for VHDL's `after`
+- *(vhdl)* nested assignment targets
+- *(vhdl)* read and assign arrays of wide elements whole, and string objects
+- *(vhdl)* unconstrained parameters, results and string objects take their bounds
+- *(vhdl)* to_string with a unit, digits or format, and minimum of vectors
+- *(vhdl)* real objects, and ieee.math_real at run time
+- *(vhdl)* VHDL waits, signal history, initial values and std.env
+- *(vhdl)* unroll loops whose parameter bounds a slice, and jump out of nested loops
+- *(vhdl)* build report messages at run time, as xsim prints them
+- *(fpga)* 7-series routes weighed as Vivado's timer finds them
+- *(fpga)* byte write enables, arranged as Vivado arranges them
+- *(ir)* write part of a memory element
+- *(fpga)* both halves' ways through a table by default, measured again
+- *(fpga)* when the clock reaches each register, measured and placed by
+- *(fpga)* median moves, which bring a stranded cell back
+- *(fpga)* a dedicated group's own wires cost nothing in the placement's estimate
+
+### Fixed
+
+- *(tools)* the gate packages the crate in a target directory of its own
+- *(fpga)* an IO register on a single-pad IO tile is refused before placing
+- *(fpga)* an ODDR on a 7-series buffer's enable is refused before placing
+- *(fpga)* logic on a 7-series PLL's CLKOUT0 is timed
+- *(fpga)* an ODDR on the pad of a 7-series single-pad IO tile routes
+- *(ir)* an inout port connected to a slice is inlined onto those bits
+- *(ir)* BitView expands each shared expression once
+- *(fpga)* a sum of products with a term too small for a block stays driven
+- *(ip)* iterate sdram_burst's test ports without a range loop
+- *(ip)* iterate h264_inter's test sub-types without a range loop
+- *(fpga)* a block RAM port with a clock but nothing else is tied off
+- *(fpga)* serve the smartcard-ctl interface string, and reset flash-read counters per LOAD
+- *(docs)* escape pipes in three rustdoc markdown tables
+- *(fpga)* a block RAM port of width 0 writes nothing
+- *(program)* drop LSC_REFRESH from the ECP5 load so Apollo does not re-enumerate
+- *(fpga)* a FIFO with EN_SYN false loses REGCE and holds RSTREG idle
+- *(cynthion)* the Nano S bench takes no guard time beyond ISO 7816's two etu
+- *(fpga)* an iCE40 synchronous reset waits for the enable, so widen it in mapping
+- *(fpga)* keep a refined group only if better with its branch's load
+- *(fpga)* report a cell put on a held site rather than panic
+- *(fpga)* walk a clock buffer's road from its pad in the site's order
+- *(xray)* give an exported constant table its pin on A6
+- *(xray)* let Vivado tie a carry lane's generate around Reticle's routes
+- *(xray)* place a Vivado export's slice readers before what they read
+- *(tools)* time a netlist alone with its clocks apart and its periods tight
+- *(fpga)* fold a table that reads a flip-flop and its merged copy
+- *(xray)* offer the router one input of a signal a table reads twice
+- *(sim)* lookup tables resolve an unknown input their function ignores
+- *(fpga)* a 7-series build that is not fully routed fails
+- *(xray)* read a carry out off the lane above a sum read beside it
+- *(sim)* delays, switches and wake order as xsim simulates them
+- *(verilog)* unique and priority if warn, and unique0 case does not
+- *(verilog)* an immediate assertion runs its pass or its fail action
+- *(verilog)* %m names the block, task or function it is written in
+- *(sim)* $monitor prints only when a monitored value changes
+- *(sim)* $random and $dist_* as IEEE 1364-2005 defines them
+- *(verilog)* a module has the `timescale written before it
+- *(sim)* format $display values as xsim prints them
+- *(vhdl)* `=` of two std_logic values compares them exactly
+- *(vhdl)* downward array initial values, aggregate targets, aliases, wide case ranges
+- *(vhdl)* literals, std_logic folding, matching and shifts as xsim has them
+- *(fpga)* a flip-flop's setup by how its data arrives, measured
+
+### Other
+
+- *(fpga)* a failed build in two load-sensitive tests says how it ended
+- *(synth)* enumerate only places that are arithmetic on their indices
+- *(fpga)* the deblocker's 205,796 lookup tables, measured again
+- *(synth)* a select or part-write at a computed place is a multiplexer
+- *(ip)* h264_recon reproduces the model's decode of real streams
+- *(ip)* h264_recon's README, and its throughput measured
+- *(h264)* state in section 1 the choices the model's dumps made
+- *(h264)* move direct_spatial_mv_pred_flag and cabac_init_idc to SLICE_DBLK
+- *(h264)* model dumps in the parse agent's token layout, and an I_PCM corpus
+- *(h264)* Baseline test streams from libx264 and ffmpeg's decode of each
+- *(h264)* the syntax token stream the decoder's stages share
+- *(fpga)* regenerate the qor placed-bitstream ledger
+- *(fpga)* run four Vivado jobs at a time by default
+- *(fpga)* the stray byte seen once more, and the board's flash state
+- *(fpga)* the Husky-changing Vivado rules, applied and measured
+- *(fpga)* the iCE40UP5K board checks as ignored tests, and the stray 0x00
+- *(fpga)* the RGB LED seen stepping from flash on the iCE40UP5K board
+- *(fpga)* a tile's bels, measured against Vivado
+- *(trellis)* the RAM-and-resets design packs into 76 tiles now
+- Nano S SEPROXYHAL card bench (seph_mcu + iso7816_uart + usb_cdc_acm on AUX)
+- *(fpga)* satisfy the lints nightly clippy adds
+- *(fpga)* measure the placement's share of the distance to Vivado again
+- *(fpga)* the placements, side by side
+- *(fpga)* the placement's estimate, refitted and not kept
+- *(xray)* hold a 7-series build to the same bytes in two processes
+- *(fpga)* a way through to the propagate, measured against Vivado
+- *(fpga)* pair lookup tables only when a design needs the sites
+- *(fpga)* the other clocks whose netlist is over 1.10 of Vivado's
+- *(fpga)* copy a flip-flop read by a wide fanout, as Vivado's synthesis does
+- *(fpga)* put a sum of three terms on one carry chain, as Vivado does
+- *(fpga)* a placement Vivado refused that was legal
+- *(fpga)* the netlist against Vivado's, placed by Vivado
+- *(fpga)* synthesise equalities, small adders and resets as Vivado does
+- *(fpga)* speed grades, measured
+- *(fpga)* the same bitstream, sooner — where the time went and what changed
+- *(xray)* ask a clock question of each wire name once
+- *(synth)* name a scalarised memory's words from one index
+- *(synth)* find an aliased net's readers in one walk, not one each
+- *(fpga)* name a run of new cells from one index, not a scan each
+- *(route)* a radix queue for the expansion, and physical nodes in one pass
+- *(place)* cheaper site rules and legality checks, same answers
+- *(xray)* parse the tile grid once, and look pip delays up by number
+- *(fpga)* the clock's arrival on the XC7A35T, measured
+- *(fpga)* sdp_65536x4 in the memory corpus, and legacy builds routed
+- *(fpga)* deep memories and single ports as Vivado builds them, measured
+- the corpus defects, fixed, and the reading that was wrong
+- *(sim)* the RAMB18E1 and DSP48E1 Vivado made of the language corpus
+- *(sim)* the language against xsim, and the corpus synthesised by both
+- *(sim)* a language corpus held to what xsim printed
+- *(sim)* system tasks and functions, measured against xsim
+- *(sim)* what still differs from xsim for VHDL, and why
+- *(fpga)* the 7-series route costs ask each wire name once
+- *(fpga)* byte writes as Vivado arranges them, measured
+- *(fpga)* filling slices, measured
+
 ## [0.0.8](https://github.com/KarpelesLab/reticle/compare/v0.0.7...v0.0.8) - 2026-11-07
 
 ### Added
